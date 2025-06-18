@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+motor
+httpx
+pytest
+flake8
+pytest-asyncio
+python-dotenv
+coverage
+pytest-cov
