@@ -1,3 +1,4 @@
+FullstackFoundLab
 FoundLab Core – Reputação Modular para Finanças Digitais
 A FoundLab é uma infraestrutura de reputação digital que conecta finanças tradicionais (TradFi) com o universo Web3.
 Este repositório representa o backend institucional do projeto, com arquitetura modular baseada em FastAPI, MongoDB e lógica proprietária de score P(x).
@@ -64,3 +65,19 @@ Modular, escalável, auditável
 
 Este projeto faz parte da infraestrutura crítica da FoundLab.
 Uso sob NDA. Score P(x) é algoritmo proprietário com base em flags e IA.
+=======
+# Run and deploy your AI Studio app
+
+This contains everything you need to run your app locally.
+
+## Run Locally
+
+**Prerequisites:**  Node.js
+
+
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
+ main
