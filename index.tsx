@@ -12,9 +12,10 @@ const GEMINI_MODEL_NAME = 'gemini-2.5-flash-preview-04-17';
 
 const ai = new GoogleGenAI({ apiKey: API_KEY! });
 
-const BOOT_DURATION = 2000; // ms, slightly reduced for faster iteration
-const DECISION_PROCESSING_TIME = 1800; // ms for fake loading
-const SCENARIO_SETUP_PROCESSING_TIME = 1000; // ms for fake analysis when setting up scenario
+const BOOT_DURATION = 1500; // ms
+const DECISION_PROCESSING_TIME = 1200; // ms for fake loading
+const SCENARIO_SETUP_PROCESSING_TIME = 700; // ms 
+const SIGNIFICANT_SCORE_CHANGE_THRESHOLD = 75; // For timeline event
 
 // --- TYPE DEFINITIONS ---
 interface LogEntry {
@@ -74,6 +75,7 @@ interface DecisionAuditEntry {
 type ModuleType = 'Dados' | 'Motor' | 'Interface' | 'API' | 'Orquestração' | 'Validação' | 'Segurança' | 'Core IP' | 'Conector' | 'Analytics' | 'IA/ML' | 'Infraestrutura';
 
 interface FoundLabModule {
+    id: string; // Added for unique identification in Mermaid
     title: string;
     description: string;
     moduleType: ModuleType;
@@ -115,11 +117,26 @@ interface LastBlockContext {
     relevantFoundLabModuleText?: string;
 }
 
-type AppMode = 'simulator' | 'catalog' | 'documents';
+interface TimelineEvent {
+    id: string;
+    timestamp: Date;
+    type: 'score_change' | 'critical_flag' | 'block_decision' | 'module_toggle' | 'scenario_start' | 'product_milestone';
+    title: string; // This will become the primary icon/text
+    description?: string; // Full text for tooltip
+    data?: {
+        scoreChange?: number;
+        flagName?: string;
+        moduleName?: string;
+        moduleState?: 'active' | 'degraded';
+        value?: number; // for score
+    };
+}
+
+type AppMode = 'landing' | 'simulator' | 'catalog' | 'documents';
 
 
 // --- STATE ---
-let currentMode: AppMode = 'simulator';
+let currentMode: AppMode = 'landing'; // Default to landing page
 
 // Simulator State
 let currentScore: number = 950;
@@ -137,6 +154,7 @@ let decisionAuditLog: DecisionAuditEntry[] = [];
 let isLoadingDecision: boolean = false;
 let isSettingUpScenario: boolean = false;
 let activeProductDemoName: string | null = null;
+let criticalTimelineEvents: TimelineEvent[] = [];
 
 
 let simulationIntervalId: number | null = null;
@@ -347,6 +365,7 @@ const flagTypes: FlagType[] = [
 
 const foundLabModules: FoundLabModule[] = [
     { 
+        id: "scorelab_core_module",
         title: "ScoreLab Core", 
         description: "Motor central de reputação e scoring dinâmico para avaliação de risco em tempo real.",
         moduleType: "Motor",
@@ -362,6 +381,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Bancos utilizam para analisar o risco de transferências; Exchanges para monitorar depósitos e saques de criptoativos."
     },
     { 
+        id: "dfc_module",
         title: "Dynamic Flag Council (DFC)", 
         description: "Sistema de orquestração e validação de flags de risco, garantindo relevância e prevenindo sobrecarga de alertas.",
         moduleType: "Orquestração",
@@ -375,6 +395,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Grandes plataformas financeiras para refinar seus alertas de compliance, focando apenas nos eventos verdadeiramente críticos."
     },
     { 
+        id: "sherlock_validator_module",
         title: "Sherlock Validator", 
         description: "Validador de risco e compliance com fontes externas (e.g., Chainalysis, OFAC lists, dados de sanções).",
         moduleType: "Validação",
@@ -388,6 +409,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Instituições financeiras para triagem de clientes e transações contra listas de sanções internacionais."
     },
     { 
+        id: "sentinela_module",
         title: "Sentinela", 
         description: "Monitoramento em tempo real de carteiras e padrões comportamentais para detecção proativa de ameaças e desvios.",
         moduleType: "Segurança",
@@ -399,6 +421,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Plataformas de e-commerce e bancos digitais para detectar e bloquear atividades fraudulentas em contas de clientes em tempo real."
     },
     { 
+        id: "score_engine_module",
         title: "Score Engine", 
         description: "Componente central que calcula e ajusta scores de risco e reputação com base em eventos, flags e modelos de risco configuráveis.",
         moduleType: "Motor",
@@ -410,6 +433,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Sistemas de crédito para ajustar limites dinamicamente; plataformas de seguro para precificar apólices baseadas em comportamento."
     },
     { 
+        id: "sigilmesh_engine_module",
         title: "SigilMesh (NFT Engine)", 
         description: "Geração de reputação NFT dinâmica e rastreável, tokenizando a confiança e as credenciais verificáveis.",
         moduleType: "Motor",
@@ -423,6 +447,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Profissionais para comprovar qualificações em plataformas de freelancing; comunidades DAO para gerenciar acesso e votação."
     },
     { 
+        id: "kyc_ai_module",
         title: "KYC/AI Module", 
         description: "Valida identidade com inteligência artificial adaptativa, otimizando o onboarding e reduzindo fraudes de identidade.",
         moduleType: "IA/ML",
@@ -434,6 +459,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Fintechs e bancos para automatizar e tornar mais seguro o processo de abertura de contas."
     },
     { 
+        id: "compliance_orchestrator_module",
         title: "Compliance Orchestrator", 
         description: "Centraliza e executa políticas de conformidade programaticamente, adaptando-se a diferentes regulações e requisitos internos.",
         moduleType: "Orquestração",
@@ -445,6 +471,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Empresas multinacionais para gerenciar a complexidade de diferentes regimes regulatórios em suas operações."
     },
     { 
+        id: "public_api_module",
         title: "API Pública", 
         description: "Interface para consulta externa e integração institucional de scores, vereditos e outras funcionalidades da plataforma FoundLab.",
         moduleType: "API",
@@ -456,6 +483,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Parceiros de tecnologia integrando as soluções FoundLab em seus próprios produtos; clientes construindo dashboards customizados."
     },
     { 
+        id: "web_dashboard_module",
         title: "Web Dashboard", 
         description: "Painel visual de monitoramento, histórico e status para operadores, analistas e gestores.",
         moduleType: "Interface",
@@ -467,6 +495,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Equipes de SOC (Security Operations Center) para monitorar alertas de segurança; analistas de fraude para investigar casos suspeitos."
     },
     { 
+        id: "anomaly_detector_module",
         title: "Anomaly Detector", 
         description: "Detecção de comportamentos fora do padrão utilizando modelos de IA, identificando atividades suspeitas que escapam a regras tradicionais.", 
         moduleType: "IA/ML", 
@@ -479,6 +508,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Detecção de padrões de compra fraudulentos em cartões de crédito; identificação de acesso incomum a dados sensíveis em sistemas corporativos."
     },
     { 
+        id: "reputation_kernel_module",
         title: "Reputation Kernel", 
         description: "Núcleo de cálculo e distribuição de reputação, considerado propriedade intelectual central da FoundLab, responsável pela lógica fundamental de avaliação reputacional.", 
         moduleType: "Core IP", 
@@ -491,6 +521,7 @@ const foundLabModules: FoundLabModule[] = [
         realWorldUse: "Serve como base para todos os produtos FoundLab que dependem de uma métrica de reputação confiável e dinâmica."
     },
     { 
+        id: "dynamic_feedback_loop_module",
         title: "Dynamic Feedback Loop", 
         description: "Ciclo de aprendizado contínuo com IA para refinar modelos de risco, flags e algoritmos de decisão com base em novos dados e resultados de vereditos.", 
         moduleType: "IA/ML", 
@@ -502,29 +533,29 @@ const foundLabModules: FoundLabModule[] = [
         activationCondition: "Operação contínua, onde os resultados de decisões (confirmadas como fraude, falso positivo, etc.) e novos dados de ameaças retroalimentam os modelos.",
         realWorldUse: "Sistemas de detecção de fraude que se tornam mais inteligentes e precisos com o tempo, aprendendo com cada novo caso."
     },
-    { title: "Mirror Engine", description: "Módulo que cria reflexos comportamentais e históricos paralelos para simulação e teste de cenários 'what-if'.", moduleType: "Analytics", impactScore: 7, usedInProductIds: ["aistudio"] },
-    { title: "GasMonitor", description: "Monitora padrões de uso de gás (taxas de transação) em blockchains para detectar anomalias e comportamentos suspeitos.", moduleType: "Analytics", impactScore: 6, usedInProductIds: ["chainbridge"] },
-    { title: "Token Provenance", description: "Valida a origem e o histórico de tokens e ativos digitais, rastreando sua movimentação através de blockchains.", moduleType: "Validação", impactScore: 8, usedInProductIds: ["veritas", "chainbridge"] },
-    { title: "Avaliador FoundLab", description: "Score reputacional genérico e configurável baseado em múltiplas fontes internas e externas, servindo como um benchmark.", moduleType: "Motor", impactScore: 7 },
-    { title: "Flag Loader", description: "Carrega e aplica configurações de flags de risco dinamicamente, permitindo atualizações rápidas de regras de detecção.", moduleType: "Infraestrutura", impactScore: 5, usedInProductIds: ["guardianai", "aistudio"] },
-    { title: "Metadata Loader", description: "Ingestão de dados auxiliares e metadados para análise contextual e enriquecimento de perfis de risco.", moduleType: "Dados", impactScore: 6, usedInProductIds: ["sigilmesh", "aistudio"] },
-    { title: "Score Snapshot", description: "Registra snapshots periódicos de score e status de entidades para auditoria, análise de tendência e conformidade.", moduleType: "Dados", impactScore: 5 },
-    { title: "Watchdog Listener", description: "Listener para eventos anômalos e alertas críticos em tempo real, atuando como um sistema de alerta primário.", moduleType: "Segurança", impactScore: 8, usedInProductIds: ["guardianai", "nexusplatform"] },
-    { title: "Reputation Webhook", description: "Entrega de vereditos reputacionais e alertas via callback para sistemas externos e de parceiros.", moduleType: "API", impactScore: 6 },
-    { title: "Chainalysis Connector", description: "Integração com API da Chainalysis para enriquecimento de dados de risco on-chain e análise de entidades.", moduleType: "Conector", impactScore: 7, usedInProductIds: ["veritas"] },
-    { title: "Bitquery Connector", description: "Consulta blockchain de alta performance via Bitquery para análise de transações, endereços e smart contracts.", moduleType: "Conector", impactScore: 7, usedInProductIds: ["veritas"] },
-    { title: "Open Finance Connector", description: "Integração com dados bancários e financeiros via APIs de Open Finance e Open Banking.", moduleType: "Conector", impactScore: 7, usedInProductIds: ["chainbridge"] },
-    { title: "KYT Engine", description: "Motor de Know Your Transaction (KYT) com lógica reputacional embutida para análise profunda de transações financeiras.", moduleType: "Motor", impactScore: 8 },
-    { title: "Explorer Scanner", description: "Scanner de blocos, transações e histórico em tempo real para indexação, análise e monitoramento de blockchains.", moduleType: "Dados", impactScore: 7, usedInProductIds: ["veritas"] },
-    { title: "Badges Engine", description: "Geração de selos e badges reputacionais (digitais ou NFT) baseados em score, comportamento e credenciais verificadas.", moduleType: "Interface", impactScore: 6, usedInProductIds: ["sigilmesh"] },
-    { title: "Wallet Health", description: "Avaliação da saúde e confiabilidade de carteiras digitais com base em histórico de transações, interações e exposição a riscos.", moduleType: "Analytics", impactScore: 7 },
-    { title: "Reputation Mapper", description: "Mapeamento de conexões e relacionamentos reputacionais entre entidades, endereços e ativos digitais.", moduleType: "Analytics", impactScore: 7, usedInProductIds: ["sigilmesh"] },
-    { title: "Compliance Ruleset", description: "Conjunto dinâmico e versionável de regras regulatórias e políticas internas para avaliação automatizada de conformidade.", moduleType: "Motor", impactScore: 8, usedInProductIds: ["veritas", "nexusplatform"] },
-    { title: "Flag Trigger Engine", description: "Ativador de flags de risco baseado em padrões contextuais complexos, correlação de eventos e regras condicionais.", moduleType: "Motor", impactScore: 7 },
-    { title: "Score Decay Manager", description: "Gerencia a perda ou manutenção de reputação ao longo do tempo (time decay), ajustando scores com base na relevância temporal dos eventos.", moduleType: "Motor", impactScore: 6 },
-    { title: "Malicious Pattern DB", description: "Base de dados atualizada de padrões maliciosos conhecidos (assinaturas de malware, endereços fraudulentos, etc.) para detecção rápida.", moduleType: "Dados", impactScore: 8, usedInProductIds: ["guardianai"] },
-    { title: "Reputational Sandbox", description: "Ambiente de simulação e teste para avaliar o impacto de novas regras, flags ou modelos de score sem afetar a produção.", moduleType: "Infraestrutura", impactScore: 7, usedInProductIds: ["aistudio"] },
-    { title: "Reputation Archive", description: "Armazena históricos de reputação, scores, flags e evidências de forma segura e auditável para conformidade e análise forense.", moduleType: "Dados", impactScore: 6, usedInProductIds: ["nexusplatform"] }
+    { id: "mirror_engine_module", title: "Mirror Engine", description: "Módulo que cria reflexos comportamentais e históricos paralelos para simulação e teste de cenários 'what-if'.", moduleType: "Analytics", impactScore: 7, usedInProductIds: ["aistudio"] },
+    { id: "gas_monitor_module", title: "GasMonitor", description: "Monitora padrões de uso de gás (taxas de transação) em blockchains para detectar anomalias e comportamentos suspeitos.", moduleType: "Analytics", impactScore: 6, usedInProductIds: ["chainbridge"] },
+    { id: "token_provenance_module", title: "Token Provenance", description: "Valida a origem e o histórico de tokens e ativos digitais, rastreando sua movimentação através de blockchains.", moduleType: "Validação", impactScore: 8, usedInProductIds: ["veritas", "chainbridge"] },
+    { id: "avaliador_foundlab_module", title: "Avaliador FoundLab", description: "Score reputacional genérico e configurável baseado em múltiplas fontes internas e externas, servindo como um benchmark.", moduleType: "Motor", impactScore: 7 },
+    { id: "flag_loader_module", title: "Flag Loader", description: "Carrega e aplica configurações de flags de risco dinamicamente, permitindo atualizações rápidas de regras de detecção.", moduleType: "Infraestrutura", impactScore: 5, usedInProductIds: ["guardianai", "aistudio"] },
+    { id: "metadata_loader_module", title: "Metadata Loader", description: "Ingestão de dados auxiliares e metadados para análise contextual e enriquecimento de perfis de risco.", moduleType: "Dados", impactScore: 6, usedInProductIds: ["sigilmesh", "aistudio"] },
+    { id: "score_snapshot_module", title: "Score Snapshot", description: "Registra snapshots periódicos de score e status de entidades para auditoria, análise de tendência e conformidade.", moduleType: "Dados", impactScore: 5 },
+    { id: "watchdog_listener_module", title: "Watchdog Listener", description: "Listener para eventos anômalos e alertas críticos em tempo real, atuando como um sistema de alerta primário.", moduleType: "Segurança", impactScore: 8, usedInProductIds: ["guardianai", "nexusplatform"] },
+    { id: "reputation_webhook_module", title: "Reputation Webhook", description: "Entrega de vereditos reputacionais e alertas via callback para sistemas externos e de parceiros.", moduleType: "API", impactScore: 6 },
+    { id: "chainalysis_connector_module", title: "Chainalysis Connector", description: "Integração com API da Chainalysis para enriquecimento de dados de risco on-chain e análise de entidades.", moduleType: "Conector", impactScore: 7, usedInProductIds: ["veritas"] },
+    { id: "bitquery_connector_module", title: "Bitquery Connector", description: "Consulta blockchain de alta performance via Bitquery para análise de transações, endereços e smart contracts.", moduleType: "Conector", impactScore: 7, usedInProductIds: ["veritas"] },
+    { id: "open_finance_connector_module", title: "Open Finance Connector", description: "Integração com dados bancários e financeiros via APIs de Open Finance e Open Banking.", moduleType: "Conector", impactScore: 7, usedInProductIds: ["chainbridge"] },
+    { id: "kyt_engine_module", title: "KYT Engine", description: "Motor de Know Your Transaction (KYT) com lógica reputacional embutida para análise profunda de transações financeiras.", moduleType: "Motor", impactScore: 8 },
+    { id: "explorer_scanner_module", title: "Explorer Scanner", description: "Scanner de blocos, transações e histórico em tempo real para indexação, análise e monitoramento de blockchains.", moduleType: "Dados", impactScore: 7, usedInProductIds: ["veritas"] },
+    { id: "badges_engine_module", title: "Badges Engine", description: "Geração de selos e badges reputacionais (digitais ou NFT) baseados em score, comportamento e credenciais verificadas.", moduleType: "Interface", impactScore: 6, usedInProductIds: ["sigilmesh"] },
+    { id: "wallet_health_module", title: "Wallet Health", description: "Avaliação da saúde e confiabilidade de carteiras digitais com base em histórico de transações, interações e exposição a riscos.", moduleType: "Analytics", impactScore: 7 },
+    { id: "reputation_mapper_module", title: "Reputation Mapper", description: "Mapeamento de conexões e relacionamentos reputacionais entre entidades, endereços e ativos digitais.", moduleType: "Analytics", impactScore: 7, usedInProductIds: ["sigilmesh"] },
+    { id: "compliance_ruleset_module", title: "Compliance Ruleset", description: "Conjunto dinâmico e versionável de regras regulatórias e políticas internas para avaliação automatizada de conformidade.", moduleType: "Motor", impactScore: 8, usedInProductIds: ["veritas", "nexusplatform"] },
+    { id: "flag_trigger_engine_module", title: "Flag Trigger Engine", description: "Ativador de flags de risco baseado em padrões contextuais complexos, correlação de eventos e regras condicionais.", moduleType: "Motor", impactScore: 7 },
+    { id: "score_decay_manager_module", title: "Score Decay Manager", description: "Gerencia a perda ou manutenção de reputação ao longo do tempo (time decay), ajustando scores com base na relevância temporal dos eventos.", moduleType: "Motor", impactScore: 6 },
+    { id: "malicious_pattern_db_module", title: "Malicious Pattern DB", description: "Base de dados atualizada de padrões maliciosos conhecidos (assinaturas de malware, endereços fraudulentos, etc.) para detecção rápida.", moduleType: "Dados", impactScore: 8, usedInProductIds: ["guardianai"] },
+    { id: "reputational_sandbox_module", title: "Reputational Sandbox", description: "Ambiente de simulação e teste para avaliar o impacto de novas regras, flags ou modelos de score sem afetar a produção.", moduleType: "Infraestrutura", impactScore: 7, usedInProductIds: ["aistudio"] },
+    { id: "reputation_archive_module", title: "Reputation Archive", description: "Armazena históricos de reputação, scores, flags e evidências de forma segura e auditável para conformidade e análise forense.", moduleType: "Dados", impactScore: 6, usedInProductIds: ["nexusplatform"] }
 ];
 const allModuleTypes: ModuleType[] = Array.from(new Set(foundLabModules.map(m => m.moduleType))).sort();
 
@@ -534,7 +565,8 @@ const appContainer = document.getElementById('app-container') as HTMLElement;
 const appContent = document.getElementById('app-content') as HTMLElement;
 
 // Navigation buttons
-let simulatorNavButton: HTMLButtonElement | null;
+let homeNavButton: HTMLButtonElement | null;
+let demoNavButton: HTMLButtonElement | null;
 let catalogNavButton: HTMLButtonElement | null;
 let documentsNavButton: HTMLButtonElement | null; 
 
@@ -567,7 +599,8 @@ const alertSound = document.getElementById('alert-sound') as HTMLAudioElement | 
 
 // --- INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', () => {
-    simulatorNavButton = document.getElementById('nav-simulator-button') as HTMLButtonElement;
+    homeNavButton = document.getElementById('nav-home-button') as HTMLButtonElement;
+    demoNavButton = document.getElementById('nav-demo-button') as HTMLButtonElement;
     catalogNavButton = document.getElementById('nav-catalog-button') as HTMLButtonElement;
     documentsNavButton = document.getElementById('nav-documents-button') as HTMLButtonElement; 
 
@@ -588,15 +621,21 @@ document.addEventListener('DOMContentLoaded', () => {
         bootScreen.classList.add('hidden');
         appContainer.classList.remove('hidden');
         setupNavigationButtons();
+        setupProductModalCloseActions();
+        setupCoreModuleModalCloseActions();
         setupImpactModalCloseActions();
         loadDecisionAuditLogFromStorage();
-        renderApp();
-        updateActiveButtonStyles(); 
+        renderApp(); // Initial render will be landing page
     }, BOOT_DURATION);
 });
 
 function setupNavigationButtons(): void {
-    simulatorNavButton?.addEventListener('click', () => {
+    homeNavButton?.addEventListener('click', () => {
+        currentMode = 'landing';
+        updateActiveButtonStyles();
+        renderApp();
+    });
+    demoNavButton?.addEventListener('click', () => {
         currentMode = 'simulator';
         updateActiveButtonStyles();
         renderApp();
@@ -614,15 +653,23 @@ function setupNavigationButtons(): void {
 }
 
 function updateActiveButtonStyles(): void {
-    [simulatorNavButton, catalogNavButton, documentsNavButton].forEach(button => { 
+    [homeNavButton, demoNavButton, catalogNavButton, documentsNavButton].forEach(button => { 
         button?.classList.remove('active');
     });
-    if (currentMode === 'simulator' && simulatorNavButton) {
-        simulatorNavButton.classList.add('active');
-    } else if (currentMode === 'catalog' && catalogNavButton) {
-        catalogNavButton.classList.add('active');
-    } else if (currentMode === 'documents' && documentsNavButton) { 
-        documentsNavButton.classList.add('active');
+
+    switch (currentMode) {
+        case 'landing':
+            homeNavButton?.classList.add('active');
+            break;
+        case 'simulator':
+            demoNavButton?.classList.add('active');
+            break;
+        case 'catalog':
+            catalogNavButton?.classList.add('active');
+            break;
+        case 'documents':
+            documentsNavButton?.classList.add('active');
+            break;
     }
 }
 
@@ -632,20 +679,255 @@ function renderApp(): void {
     stopSimulation(); 
     degradedModules = []; 
     lastBlockContextForImpactView = null; 
-    activeProductDemoName = null; // Reset active product demo name
+    criticalTimelineEvents = [];
 
-    if (currentMode === 'simulator') {
-        renderSimulatorMode();
+    // activeProductDemoName is managed within each mode's rendering or initialization
+    if (currentMode !== 'simulator') {
+        activeProductDemoName = null;
+    }
+
+    if (currentMode === 'landing') {
+        renderLandingPageMode();
+    } else if (currentMode === 'simulator') {
+        // activeProductDemoName might be pre-set if coming from catalog "Ver em Ação"
+        // or a CTA on the landing page that directly loads a product demo scenario.
+        // If just clicking "DEMO" nav, it will be null or default.
+        renderSimulatorMode(); 
     } else if (currentMode === 'catalog') {
         renderCatalogMode();
     } else if (currentMode === 'documents') { 
         renderDocumentsMode();
     }
+    updateActiveButtonStyles(); // Ensure correct nav button is active after render
 }
 
 function clearAppContent(): void {
     appContent.innerHTML = '';
 }
+
+
+// --- LANDING PAGE MODE ---
+function renderLandingPageMode(): void {
+    appContent.innerHTML = `
+        <div class="landing-page-container">
+            <section class="hero-section">
+                <div class="hero-content">
+                    <svg class="hero-logo-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50 10 L90 30 L90 70 L50 90 L10 70 L10 30 Z M50 10 L50 50 L10 30 M50 50 L10 70 M50 50 L90 30 M50 50 L90 70" stroke-width="3"/></svg>
+                    <h1>FoundLab Nexus: Inteligência Reputacional. Decisões de Confiança.</h1>
+                    <p class="subtitle">Orquestramos a confiança digital com precisão e velocidade, transformando dados em blindagem infra-level para operações críticas.</p>
+                    <div class="hero-ctas">
+                        <button id="lp-cta-simulador" class="cta-button primary-cta large-cta">Explorar Demonstração Interativa</button>
+                        <button id="lp-cta-solucoes" class="cta-button secondary-cta large-cta">Conhecer Nossas Soluções</button>
+                    </div>
+                </div>
+                <div class="hero-visual-placeholder">
+                    <span>[Visual Abstrato de Conectividade e Segurança]</span>
+                </div>
+            </section>
+
+            <section class="platform-section">
+                <h2>A Plataforma FoundLab Nexus</h2>
+                <div class="platform-pillars">
+                    <div class="pillar">
+                        <div class="pillar-icon-placeholder">[P]</div>
+                        <h3>Precisão Preditiva</h3>
+                        <p>Análises avançadas para antecipar riscos complexos antes que impactem seus negócios.</p>
+                    </div>
+                    <div class="pillar">
+                        <div class="pillar-icon-placeholder">[D]</div>
+                        <h3>Decisões Automatizadas</h3>
+                        <p>Respostas em tempo real, orquestradas com inteligência para máxima eficiência operacional.</p>
+                    </div>
+                    <div class="pillar">
+                        <div class="pillar-icon-placeholder">[C]</div>
+                        <h3>Conformidade Robusta</h3>
+                        <p>Navegue pela complexidade regulatória com segurança e mantenha a integridade em todas as operações.</p>
+                    </div>
+                    <div class="pillar">
+                        <div class="pillar-icon-placeholder">[A]</div>
+                        <h3>Arquitetura Integrada</h3>
+                        <p>Visão unificada do risco em todo o ecossistema, potencializada por uma infraestrutura modular e escalável.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="solutions-teaser-section">
+                <h2>Soluções que Impulsionam a Confiança</h2>
+                <div class="solutions-grid">
+                    ${productCatalog.slice(0, 3).map(product => `
+                        <div class="solution-teaser-card" data-product-id="${product.id}">
+                            <h4>${product.name}</h4>
+                            <p>${product.shortDescription.substring(0, 100)}...</p>
+                            <button class="cta-button tertiary-cta product-teaser-cta" data-product-id="${product.id}">Saiba Mais</button>
+                        </div>
+                    `).join('')}
+                </div>
+                 <div class="all-solutions-link">
+                    <button id="lp-cta-all-solutions" class="cta-button secondary-cta">Ver todas as soluções</button>
+                </div>
+            </section>
+
+            <section class="why-foundlab-section">
+                <h2>A Vantagem FoundLab</h2>
+                <ul>
+                    <li>Tecnologia Proprietária de Vanguarda e IA Explicável.</li>
+                    <li>Inteligência Contextual em Tempo Real para Decisões Críticas.</li>
+                    <li>Segurança e Conformidade by Design, Prontas para o Futuro.</li>
+                    <li>Parceria Estratégica para Inovação Contínua e Suporte Especializado.</li>
+                </ul>
+            </section>
+
+            <section class="next-steps-section">
+                <h2>Transforme Sua Estratégia de Risco.</h2>
+                <p>Descubra como a FoundLab Nexus pode fortalecer suas operações, proteger seus ativos e habilitar novos modelos de negócio com confiança.</p>
+                <div class="hero-ctas">
+                     <button id="lp-cta-simulador-bottom" class="cta-button primary-cta large-cta">Explorar Demonstração Interativa</button>
+                     <button id="lp-cta-contato" class="cta-button secondary-cta large-cta">Fale com um Especialista (Simulado)</button>
+                </div>
+            </section>
+        </div>
+    `;
+
+    document.getElementById('lp-cta-simulador')?.addEventListener('click', () => {
+        currentMode = 'simulator';
+        renderApp();
+    });
+    document.getElementById('lp-cta-simulador-bottom')?.addEventListener('click', () => {
+        currentMode = 'simulator';
+        renderApp();
+    });
+    document.getElementById('lp-cta-solucoes')?.addEventListener('click', () => {
+        currentMode = 'catalog';
+        renderApp();
+    });
+    document.getElementById('lp-cta-all-solutions')?.addEventListener('click', () => {
+        currentMode = 'catalog';
+        renderApp();
+    });
+     document.getElementById('lp-cta-contato')?.addEventListener('click', () => {
+        alert('Funcionalidade de contato simulada. Em uma aplicação real, isso levaria a um formulário ou informações de contato.');
+    });
+
+    const teaserCards = document.querySelectorAll('.solution-teaser-card');
+    teaserCards.forEach(card => {
+        card.addEventListener('click', (event) => {
+            const target = event.target as HTMLElement;
+            const cardElement = target.closest('.solution-teaser-card') as HTMLElement;
+            if (cardElement && cardElement.dataset.productId) {
+                const productId = cardElement.dataset.productId;
+                const product = productCatalog.find(p => p.id === productId);
+                if (product) {
+                    currentMode = 'catalog'; // Go to catalog first
+                    renderApp(); // Render catalog
+                    setTimeout(() => showProductModal(product), 0); // Then show modal for specific product
+                }
+            }
+        });
+    });
+}
+
+
+// --- TIMELINE FUNCTIONS ---
+function addTimelineEvent(event: Omit<TimelineEvent, 'id' | 'timestamp'>): void {
+    const newEvent: TimelineEvent = {
+        ...event,
+        id: `timeline-event-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        timestamp: new Date()
+    };
+    criticalTimelineEvents.push(newEvent);
+    criticalTimelineEvents.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime()); // Keep sorted
+    if (criticalTimelineEvents.length > 50) { // Limit timeline events
+        criticalTimelineEvents.shift();
+    }
+    renderTimeline();
+}
+
+function renderTimeline(): void {
+    const timelineContainer = document.getElementById('timeline-container');
+    if (!timelineContainer) return;
+
+    if (criticalTimelineEvents.length === 0) {
+        timelineContainer.innerHTML = '<p class="timeline-empty-message">Nenhum evento crítico na linha do tempo.</p>';
+        return;
+    }
+
+    const firstEventTime = criticalTimelineEvents[0].timestamp.getTime();
+    const lastEventTime = criticalTimelineEvents[criticalTimelineEvents.length - 1].timestamp.getTime();
+    const totalDuration = Math.max(1, lastEventTime - firstEventTime); 
+
+    timelineContainer.innerHTML = `
+        <div class="timeline-track">
+            ${criticalTimelineEvents.map(event => {
+                const relativePosition = totalDuration > 0 ? ((event.timestamp.getTime() - firstEventTime) / totalDuration) * 100 : 0;
+                let iconText = event.title; // Use title directly as icon text
+                let fullDescription = event.description || event.title;
+
+                // For corporate style, use text or simple unicode instead of emojis
+                switch (event.type) {
+                    case 'score_change':
+                        iconText = (event.data?.scoreChange ?? 0) > 0 ? '△+' : '△-';
+                        fullDescription = `Score ${event.title}: ${(event.data?.scoreChange ?? 0) > 0 ? '+' : ''}${event.data?.scoreChange} (Atual: ${event.data?.value})`;
+                        break;
+                    case 'critical_flag':
+                        iconText = '❗'; // Exclamation mark for critical
+                        fullDescription = `Flag Crítica: ${event.data?.flagName}`;
+                        break;
+                    case 'block_decision':
+                        iconText = '■'; // Square for block
+                        break;
+                    case 'module_toggle':
+                        iconText = event.data?.moduleState === 'degraded' ? 'MOD ▼' : 'MOD ▲'; // Text for module state
+                        fullDescription = `Módulo ${event.data?.moduleName} ${event.data?.moduleState === 'degraded' ? 'DEGRADADO' : 'RESTAURADO'}`;
+                        break;
+                    case 'scenario_start':
+                        iconText = '▶'; // Play icon
+                        break;
+                    case 'product_milestone':
+                        iconText = '🔷'; // Diamond for milestone
+                        break;
+                    default:
+                        iconText = '•'; // Default dot
+                }
+                return `
+                    <div class="timeline-event type-${event.type}" 
+                         style="left: ${Math.min(100, Math.max(0, relativePosition))}%;" 
+                         title="${fullDescription} (${event.timestamp.toLocaleTimeString()})"
+                         data-event-id="${event.id}"
+                         role="button"
+                         tabindex="0"
+                         aria-label="${fullDescription}">
+                        <span class="timeline-event-icon">${iconText}</span>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+    setupTimelineEventListeners();
+}
+
+function setupTimelineEventListeners(): void {
+    const timelineContainer = document.getElementById('timeline-container');
+    timelineContainer?.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement;
+        const eventElement = target.closest('.timeline-event') as HTMLElement;
+        if (eventElement && eventElement.dataset.eventId) {
+            handleTimelineEventClick(eventElement.dataset.eventId);
+        }
+    });
+}
+
+function handleTimelineEventClick(eventId: string): void {
+    const event = criticalTimelineEvents.find(ev => ev.id === eventId);
+    if (event) {
+        addLogEntry(`Evento da Linha do Tempo: ${event.title} (${event.type}) - ${event.description || ''}`, 'system', true);
+        console.log("Timeline Event Clicked:", event);
+        document.querySelectorAll('.timeline-event.highlighted').forEach(el => el.classList.remove('highlighted'));
+        const eventEl = document.querySelector(`.timeline-event[data-event-id="${eventId}"]`);
+        eventEl?.classList.add('highlighted');
+        setTimeout(() => eventEl?.classList.remove('highlighted'), 1500); // Shorter highlight
+    }
+}
+
 
 // --- SIMULATOR MODE (DECISION FLOW) ---
 function renderSimulatorMode(
@@ -655,18 +937,18 @@ function renderSimulatorMode(
     walletAddressFromProof?: string
 ): void {
     let productDemoIndicatorHTML = '';
-    if (activeProductDemoName) {
+    if (activeProductDemoName) { // This uses the state variable `activeProductDemoName`
         productDemoIndicatorHTML = `<div class="active-product-demo-indicator">Demonstração Ativa: <strong>${activeProductDemoName}</strong></div>`;
     }
 
     appContent.innerHTML = `
-        <div class="content-title">FoundLab Nexus - Decision Flow</div>
+        <div class="content-title">FoundLab Nexus - DEMO Interativa</div>
         ${productDemoIndicatorHTML}
         <div class="simulator-config-area" id="simulator-config-area">
             <h3>Configurar Cenário de Simulação</h3>
             <div class="scenario-input-group">
-                <label for="wallet-address-input-sim" class="scenario-label">Endereço de Carteira Simulado:</label>
-                <input type="text" id="wallet-address-input-sim" placeholder="Ex: 0xRiskWallet ou nome_carteira_ficticia">
+                <label for="wallet-address-input-sim" class="scenario-label visually-hidden">Endereço de Carteira Simulado:</label>
+                <input type="text" id="wallet-address-input-sim" placeholder="Ex: 0xRiskWallet ou nome_carteira_ficticia" aria-label="Endereço de Carteira Simulado">
                 <button id="analyze-wallet-button-sim" class="cta-button primary-cta">Analisar e Iniciar</button>
             </div>
             <div id="scenario-status-sim" class="scenario-status">
@@ -679,11 +961,11 @@ function renderSimulatorMode(
             <div class="kpi-bar" id="kpi-bar"></div>
             <div class="decision-history-panel">
                 <h3>Histórico de Decisões Auditadas</h3>
-                <div id="decision-audit-log-list"><p>Nenhuma decisão auditada ainda.</p></div>
+                <div id="decision-audit-log-list"><p class="no-items-placeholder">Nenhuma decisão auditada ainda.</p></div>
             </div>
             
             <div class="main-simulation-area">
-                <div class="score-and-actions-container">
+                 <div class="score-and-actions-container">
                     <div class="score-panel" id="score-panel"></div>
                     <div class="decision-actions-wrapper">
                         <div class="decision-actions" id="decision-actions">
@@ -694,7 +976,7 @@ function renderSimulatorMode(
                         <div id="impact-button-area"></div>
                     </div>
                 </div>
-                <div class="system-health-panel-container" id="system-health-panel-container">
+                 <div class="system-health-panel-container" id="system-health-panel-container">
                     <!-- System Health Panel will be rendered here -->
                 </div>
             </div>
@@ -708,6 +990,10 @@ function renderSimulatorMode(
                     <h3>Logs e Histórico de Eventos</h3>
                     <div id="logs-list"></div>
                 </div>
+            </div>
+            <div id="timeline-container-wrapper" class="timeline-container-wrapper">
+                <h4>Linha do Tempo de Eventos Críticos</h4>
+                <div id="timeline-container"></div>
             </div>
         </div>
     `;
@@ -730,6 +1016,7 @@ function renderSimulatorMode(
     renderDecisionAuditLog(); 
     renderSystemHealthPanel();
     renderImpactModalButtonArea();
+    renderTimeline(); 
 
     const scenarioToRun = scenarioIdToInitialize || 'default_start'; 
     if (initialScoreFromProof !== undefined && initialFlagTypesFromProof) {
@@ -737,9 +1024,12 @@ function renderSimulatorMode(
     } else if (scenarioIdToInitialize && scenarioIdToInitialize !== 'default_start') {
         initializeScenario(scenarioIdToInitialize);
     } else {
-        activeProductDemoName = null; // Clear if no specific scenario
+        // If not initializing a specific scenario here, ensure activeProductDemoName is cleared if it wasn't already.
+        // This path is usually for initial load or manual navigation to simulator tab.
+        if (!scenarioIdToInitialize || scenarioIdToInitialize === 'default_start') activeProductDemoName = null; 
         updateAllSimulatorDisplays(currentScore); 
         addLogEntry("Simulador pronto. Configure um cenário ou inicie a simulação padrão.", "system");
+        addTimelineEvent({type: 'scenario_start', title: 'Simulador Pronto'});
     }
 }
 
@@ -753,27 +1043,37 @@ function initializeScenario(
     activeFlags = []; 
     degradedModules = []; 
     logEntries = []; 
+    criticalTimelineEvents = []; 
     lastBlockContextForImpactView = null;
-    activeProductDemoName = null; // Reset by default
+    // activeProductDemoName is set *before* calling renderSimulatorMode for product demos,
+    // or set to null here for custom/default scenarios.
 
     const productForScenario = productCatalog.find(p => p.scenarioId === scenarioId);
     let scenarioSpecificLogPreamble = "";
 
+    // No direct DOM manipulation for active-product-demo-indicator here.
+    // It's handled by renderSimulatorMode based on activeProductDemoName state.
+
     if (productForScenario) {
-        activeProductDemoName = productForScenario.name;
+        // activeProductDemoName should have been set by the caller (e.g. catalog "Ver em Ação")
+        // If not, it means this was called directly, so set it.
+        if (!activeProductDemoName) activeProductDemoName = productForScenario.name;
         scenarioSpecificLogPreamble = `Demonstração do ${productForScenario.name}: `;
+        addTimelineEvent({ type: 'product_milestone', title: `DEMO: ${productForScenario.name.substring(0,10)}`, description: `Cenário ${scenarioId}`});
     } else {
+        activeProductDemoName = null; // Ensure it's null for non-product scenarios
         scenarioSpecificLogPreamble = "Cenário Predefinido: ";
+        addTimelineEvent({ type: 'scenario_start', title: `CENÁRIO: ${scenarioId.substring(0,15)}`});
     }
 
 
     if (initialScoreFromConfig !== undefined && initialFlagTypesFromConfig) {
         currentScore = initialScoreFromConfig;
-        activeProductDemoName = null; // Custom wallet scenario is not a product demo
-        const indicatorContainer = document.querySelector('.active-product-demo-indicator');
-        if (indicatorContainer) indicatorContainer.remove();
+        activeProductDemoName = null; // Custom scenario, not a product demo
 
         addLogEntry(`Simulação personalizada iniciada para a carteira: ${walletAddressFromConfig || 'Desconhecida'}. Score inicial: ${currentScore}.`, 'system', true);
+        addTimelineEvent({type: 'scenario_start', title: `CARTEIRA: ${(walletAddressFromConfig || 'Custom').substring(0,10)}`, data: { value: currentScore }});
+
         initialFlagTypesFromConfig.forEach(flagType => {
             addNewFlag(flagType, `custom_scenario_${scenarioId}`, false); 
         });
@@ -838,6 +1138,7 @@ function initializeScenario(
                     currentScore = Math.max(0, currentScore - 300); 
                     updateScorePanel(currentScore, sybilImpactScore);
                     addLogEntry("IMPACTO CRÍTICO: Ataque Sybil confirmado. Score severamente reduzido.", 'error', true);
+                    addTimelineEvent({ type: 'score_change', title: 'Ataque Sybil', data: { scoreChange: currentScore - sybilImpactScore, value: currentScore } });
                      const decisionActions = document.getElementById('decision-actions');
                     if (decisionActions) {
                         decisionActions.querySelector('.block')?.classList.add('recommended-action-pulse');
@@ -854,21 +1155,19 @@ function initializeScenario(
             case 'default_start':
             default: 
                 currentScore = INITIAL_SCORE;
-                activeProductDemoName = null; // Ensure no product demo for default
-                const indicatorContainer = document.querySelector('.active-product-demo-indicator');
-                if (indicatorContainer) indicatorContainer.remove();
+                activeProductDemoName = null; // Explicitly null for default
+
                 addLogEntry(scenarioId === 'default_start' ? "Simulação padrão iniciada." : `Cenário desconhecido "${scenarioId}", iniciando simulação padrão.`, 'system', true);
+                addTimelineEvent({type: 'scenario_start', title: 'Padrão', data: { value: currentScore }});
                 addNewFlagByName('High Volume Anomaly', 'default_start', 1000);
                 addNewFlagByName('Anomalous System Access', 'default_start', 4000);
                 break;
         }
 
-        // Add other related flags for the product if not already added by specific case logic
         if (productForScenario?.relatedFlags) {
             productForScenario.relatedFlags.forEach((flagName, index) => {
                 if (!activeFlags.some(af => af.name === flagName)) { 
                     const flagType = flagTypes.find(ft => ft.name === flagName);
-                    // Add only if it's not a critical flag that should have been primary or if DFC is off
                     if (flagType && (flagType.severity !== 'critical' || !isModuleActive("Dynamic Flag Council (DFC)"))) {
                          addNewFlagByName(flagName, scenarioId, 6000 + index * 1500); 
                     }
@@ -880,21 +1179,20 @@ function initializeScenario(
         renderImpactModalButtonArea();
         startSimulation(scenarioId !== 'default_start'); 
     }
+    renderTimeline(); 
 }
 
 
 async function handleSetupScenarioFromInput(): Promise<void> {
     isSettingUpScenario = true;
     lastBlockContextForImpactView = null; 
-    activeProductDemoName = null; // Custom scenario, not a product demo
+    activeProductDemoName = null; // Custom scenario from input is not a product demo
     const statusContainer = document.getElementById('scenario-status-sim');
     const walletInputEl = document.getElementById('wallet-address-input-sim') as HTMLInputElement;
     const analyzeButton = document.getElementById('analyze-wallet-button-sim') as HTMLButtonElement;
     const defaultStartButton = document.getElementById('start-default-simulation-button') as HTMLButtonElement;
 
-    const indicatorContainer = document.querySelector('.active-product-demo-indicator');
-    if (indicatorContainer) indicatorContainer.remove();
-
+    // No direct DOM manipulation for active-product-demo-indicator here.
 
     if (!statusContainer || !walletInputEl || !analyzeButton || !defaultStartButton) {
         isSettingUpScenario = false;
@@ -988,9 +1286,8 @@ function renderSystemHealthPanel(): void {
                 ${toggleableCoreModules.map(module => `
                     <div class="system-health-module-item">
                         <label for="${module.id}" class="module-toggle-label" title="${module.description}">
-                            <input type="checkbox" id="${module.id}" data-module-title="${module.title}" ${isModuleActive(module.title) ? 'checked' : ''}>
+                            <input type="checkbox" id="${module.id}" data-module-title="${module.title}" ${isModuleActive(module.title) ? 'checked' : ''} role="switch" aria-checked="${isModuleActive(module.title)}">
                             <span class="module-name">${module.title}</span>
-                            <span class="status-indicator ${isModuleActive(module.title) ? 'active' : 'degraded'}"></span>
                         </label>
                     </div>
                 `).join('')}
@@ -1020,14 +1317,25 @@ function setupModuleToggleListeners(): void {
 
 function toggleModuleState(moduleTitle: string): void {
     const index = degradedModules.indexOf(moduleTitle);
+    const checkbox = document.getElementById(toggleableCoreModules.find(m => m.title === moduleTitle)!.id) as HTMLInputElement | null;
+
     if (index > -1) {
         degradedModules.splice(index, 1);
         addLogEntry(`Módulo ${moduleTitle} restaurado para operação normal.`, 'system', true);
+        addTimelineEvent({type: 'module_toggle', title: `MOD: ${moduleTitle.substring(0,10)} ▲`, data: { moduleName: moduleTitle, moduleState: 'active' }});
+        if(checkbox) checkbox.setAttribute('aria-checked', 'true');
     } else {
         degradedModules.push(moduleTitle);
         addLogEntry(`Módulo ${moduleTitle} DEGRADADO. Funcionalidade da simulação afetada.`, 'warning', true);
+        addTimelineEvent({type: 'module_toggle', title: `MOD: ${moduleTitle.substring(0,10)} ▼`, data: { moduleName: moduleTitle, moduleState: 'degraded' }});
+        if(checkbox) checkbox.setAttribute('aria-checked', 'false');
     }
-    renderSystemHealthPanel(); 
+    const panelContainer = document.getElementById('system-health-panel-container');
+    if (panelContainer) {
+       renderSystemHealthPanel(); 
+    } else {
+        updateAllSimulatorDisplays(currentScore); 
+    }
 }
 
 
@@ -1056,7 +1364,7 @@ function startSimulation(isScenarioRunning: boolean = false): void {
         scoreHistory.push(currentScore);
         if (scoreHistory.length > MAX_SCORE_HISTORY) scoreHistory.shift();
 
-        addLogEntry(`Score alterado: ${oldScoreVal} -> ${currentScore} (Δ ${scoreChange})`, 'info');
+        addLogEntry(`Score alterado: ${oldScoreVal} -> ${currentScore} (Δ ${currentScore - oldScoreVal})`, 'info');
         updateScorePanel(currentScore, oldScoreVal);
         updateKpis();
     }, SCORE_UPDATE_INTERVAL);
@@ -1112,6 +1420,7 @@ function updateAllSimulatorDisplays(oldScore: number): void {
     renderLogs();
     renderDecisionAuditLog();
     renderImpactModalButtonArea();
+    renderTimeline();
 }
 
 function renderKpis(): void {
@@ -1147,21 +1456,23 @@ function renderScorePanel(oldScore: number): void {
         <div class="score-value" id="score-value">${Math.round(currentScore)}</div>
         <div class="score-label">Score de Risco Reputacional</div>
         <div class="score-chart-container" id="score-chart">
-            ${scoreHistory.length > 1 ? generateSimpleBarChartHTML(scoreHistory, MAX_SCORE_HISTORY) : '(Simulação de gráfico de score de risco)'}
+            ${scoreHistory.length > 1 ? generateSimpleBarChartHTML(scoreHistory, MAX_SCORE_HISTORY) : '<div class="no-items-placeholder" style="font-size:0.75rem; padding:0.4rem;">Aguardando dados...</div>'}
         </div>
     `;
     updateScorePanelVisuals(currentScore, oldScore);
 }
 
 function generateSimpleBarChartHTML(history: number[], maxEntries: number): string {
-    const chartHeight = 50; 
+    const chartHeight = 40; 
     const barWidthPercent = 100 / maxEntries;
     const bars = history.map(s => {
         const barHeight = Math.max(1, Math.min(100, (s / 1000) * chartHeight)); 
-        let color = 'var(--secondary-color)';
-        if (s < 400) color = 'var(--error-color)';
-        else if (s < 700) color = 'var(--warning-color)';
-        return `<div style="width: ${barWidthPercent}%; height: ${barHeight}px; background-color: ${color}; opacity: ${0.5 + (s/2000)}; display: inline-block; vertical-align: bottom; margin: 0 0.5%; transition: height 0.3s ease, background-color 0.3s ease;"></div>`;
+        let color = 'var(--corporate-info)'; 
+        if (s < 400) color = 'var(--corporate-error)';
+        else if (s < 600) color = 'var(--corporate-warning)';
+        else if (s < 800) color = 'var(--corporate-info)';
+        else color = 'var(--corporate-success)';
+        return `<div style="width: ${barWidthPercent}%; height: ${barHeight}px; background-color: ${color}; opacity: ${0.7 + (s/2000)}; display: inline-block; vertical-align: bottom; margin: 0 1px; transition: height 0.2s ease, background-color 0.2s ease; border-radius: 1px 1px 0 0;"></div>`;
     }).join('');
     return `<div style="width:100%; height: ${chartHeight}px; display:flex; align-items:flex-end; justify-content:center;">${bars}</div>`;
 }
@@ -1175,7 +1486,15 @@ function updateScorePanel(newScore: number, oldScore: number): void {
     }
     const scoreChartEl = document.getElementById('score-chart');
      if (scoreChartEl) {
-        scoreChartEl.innerHTML = scoreHistory.length > 1 ? generateSimpleBarChartHTML(scoreHistory, MAX_SCORE_HISTORY) : '(Simulação de gráfico de score de risco)';
+        scoreChartEl.innerHTML = scoreHistory.length > 1 ? generateSimpleBarChartHTML(scoreHistory, MAX_SCORE_HISTORY) : '<div class="no-items-placeholder" style="font-size:0.75rem; padding:0.4rem;">Aguardando dados...</div>';
+    }
+    if (Math.abs(newScore - oldScore) >= SIGNIFICANT_SCORE_CHANGE_THRESHOLD) {
+        addTimelineEvent({
+            type: 'score_change',
+            title: `SCORE ${newScore > oldScore ? '▲' : '▼'}`,
+            description: `Score foi de ${oldScore} para ${newScore}.`,
+            data: { scoreChange: newScore - oldScore, value: newScore }
+        });
     }
 }
 
@@ -1184,7 +1503,7 @@ function updateScorePanelVisuals(newScore: number, oldScore: number | undefined)
     if (!scoreValueEl || oldScore === undefined) return;
 
     scoreValueEl.classList.remove('alert', 'score-critical', 'score-high', 'score-medium', 'score-low');
-    appContainer.classList.remove('screen-flash-alert');
+    appContainer.classList.remove('screen-flash-alert'); // Removed flash
 
     if (newScore < 400) scoreValueEl.classList.add('score-critical');
     else if (newScore < 600) scoreValueEl.classList.add('score-high');
@@ -1192,10 +1511,9 @@ function updateScorePanelVisuals(newScore: number, oldScore: number | undefined)
     else scoreValueEl.classList.add('score-low');
 
 
-    if ((oldScore - newScore) > 50) {
-        scoreValueEl.classList.add('alert');
-        appContainer.classList.add('screen-flash-alert');
-        if (alertSound && alertSound.src) { 
+    if ((oldScore - newScore) > 50) { 
+        // No visual alert animation, just log
+        if (alertSound && alertSound.src && typeof alertSound.play === 'function') { 
             alertSound.play().catch(e => console.warn("Falha ao reproduzir áudio de alerta:", e)); 
         }
         addLogEntry(`ALERTA: Queda de score significativa! (${oldScore - newScore} pontos)`, 'error', true);
@@ -1231,11 +1549,14 @@ async function addNewFlag(flagType: FlagType, scenarioId?: string, simulateProce
     currentScore = Math.max(0, Math.min(1000, currentScore)); 
 
     addLogEntry(`Nova flag: ${flagType.name} (Peso Efetivo: ${effectiveWeight}). Score: ${currentScore}`, flagType.severity === 'critical' || flagType.severity === 'high' ? 'warning' : 'info');
+    if (flagType.severity === 'critical') {
+        addTimelineEvent({type: 'critical_flag', title: `FLAG: ${flagType.name.substring(0,12)}!`, data: { flagName: flagType.name } });
+    }
     updateScorePanel(currentScore, oldScoreForFlag);
     renderFlags(newFlag.id); 
 
     if (simulateProcessing) { 
-        await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000)); 
+        await new Promise(resolve => setTimeout(resolve, 400 + Math.random() * 600)); 
     }
 
     if (!API_KEY) {
@@ -1264,12 +1585,18 @@ async function addNewFlag(flagType: FlagType, scenarioId?: string, simulateProce
             });
             explanation = response.text || "Não foi possível gerar a explicação.";
         } else { 
-            // Simulate API call for non-real API usage to still use the API quota/test Gemini SDK setup
-            const response = await ai.models.generateContent({
-                model: GEMINI_MODEL_NAME,
-                contents: finalPrompt,
-            });
-            explanation = response.text || "Não foi possível gerar a explicação.";
+            // Fallback for when USE_REAL_API is false but API_KEY might be present (simulated call)
+            // Or, if API_KEY is present, this block will still make a real call.
+            // To truly avoid API call when USE_REAL_API is false, add explicit check.
+            if (API_KEY) { // Check API_KEY again, as !API_KEY is handled later
+                const response = await ai.models.generateContent({
+                    model: GEMINI_MODEL_NAME,
+                    contents: finalPrompt,
+                });
+                explanation = response.text || "Não foi possível gerar a explicação (simulado).";
+            } else {
+                 explanation = "Explicação simulada: " + flagType.basePrompt.substring(0, 100) + "... (API não usada)";
+            }
         }
     } catch (error) {
         console.error("Erro ao gerar explicação da flag:", error);
@@ -1295,21 +1622,18 @@ function renderFlags(newFlagId?: string): void {
         return;
     }
     flagsList.innerHTML = activeFlags.map(flag => `
-        <div class="flag-item severity-${flag.severity} ${flag.id === newFlagId ? 'new-flag-glow' : ''}" id="${flag.id}">
+        <div class="flag-item severity-${flag.severity} ${flag.id === newFlagId ? 'new-flag-fade-in' : ''}" id="${flag.id}">
             <div class="flag-header">
                 <span class="flag-severity-indicator severity-${flag.severity}-indicator"></span>
                 <strong>${flag.name}</strong>
             </div>
             <p class="explanation">${flag.explanation}</p>
-            <p class="timestamp">${flag.timestamp.toLocaleTimeString()}</p>
+            <p class="timestamp">${flag.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</p>
         </div>
     `).join('');
 
     if (newFlagId) {
-        setTimeout(() => {
-            const el = document.getElementById(newFlagId);
-            el?.classList.remove('new-flag-glow');
-        }, 2000); 
+        // Fade-in is handled by CSS animation, no need to remove class
     }
 }
 
@@ -1322,7 +1646,7 @@ function renderLogs(): void {
     }
     logsList.innerHTML = logEntries.slice().reverse().map(entry => `
         <div class="log-entry ${entry.type}">
-            <span class="timestamp">[${entry.timestamp.toLocaleTimeString()}]</span>
+            <span class="timestamp">[${entry.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}]</span>
             <span class="message">${entry.message}</span>
         </div>
     `).join('');
@@ -1356,30 +1680,28 @@ function getRelevantFoundLabModuleText(flags: Flag[]): string {
     const criticalFlagNames = flags.filter(f => f.severity === 'critical' || f.severity === 'high').map(f => f.name);
     let relevantModules = new Set<string>();
 
-    if (criticalFlagNames.length === 0) { // Default if no specific critical flags drove the decision
+    if (criticalFlagNames.length === 0) { 
         return "módulos como ScoreLab Core e Dynamic Flag Council (DFC)";
     }
 
     for (const flagName of criticalFlagNames) {
         for (const product of productCatalog) {
             if (product.relatedFlags?.includes(flagName)) {
-                if (product.name === "FoundLab Core") { // Prioritize specific products over the general "FoundLab Core"
+                if (product.name === "FoundLab Core") { 
                      product.coreModulesUsedTitles?.forEach(m => {
-                        if (m === "ScoreLab Core" || m === "Anomaly Detector" || m === "Dynamic Flag Council (DFC)" || m === "Sherlock Validator") {
+                        if (["ScoreLab Core", "Anomaly Detector", "Dynamic Flag Council (DFC)", "Sherlock Validator"].includes(m)) {
                             relevantModules.add(m);
                         }
                      });
                 } else if (product.coreModulesUsedTitles && product.coreModulesUsedTitles.length > 0) {
-                    // Add the first 1-2 key modules from the product
                     relevantModules.add(product.coreModulesUsedTitles[0]);
                     if (product.coreModulesUsedTitles.length > 1 && product.coreModulesUsedTitles[0] !== "ScoreLab Core") relevantModules.add(product.coreModulesUsedTitles[1]);
                 } else {
-                     relevantModules.add(product.name); // Fallback to product name if no core modules listed
+                     relevantModules.add(product.name); 
                 }
             }
         }
     }
-    // Ensure generic key modules are mentioned if nothing very specific is found or to complement
     if (relevantModules.size === 0 || !Array.from(relevantModules).some(m => ["ScoreLab Core", "Anomaly Detector", "Dynamic Flag Council (DFC)", "Veritas Protocol", "Guardian AI"].includes(m))) {
         relevantModules.add("ScoreLab Core");
         relevantModules.add("Dynamic Flag Council (DFC)");
@@ -1390,7 +1712,7 @@ function getRelevantFoundLabModuleText(flags: Flag[]): string {
     if (moduleArray.length === 2) return `módulos como ${moduleArray.join(' e ')}`;
     if (moduleArray.length > 2) return `módulos como ${moduleArray.slice(0, 2).join(', ')} e outros componentes FoundLab`;
     
-    return "o ecossistema FoundLab Nexus"; // Fallback
+    return "o ecossistema FoundLab Nexus"; 
 }
 
 
@@ -1404,9 +1726,17 @@ async function handleDecision(action: string): Promise<void> {
     decisionLoaderOverlay.classList.remove('hidden');
     if (decisionLoaderProgressBar) decisionLoaderProgressBar.style.width = '0%'; 
 
-    setTimeout(() => { if (decisionLoaderProgressBar) decisionLoaderProgressBar.style.width = '100%'; }, 100);
+    // Animate progress bar for corporate feel (linear, not easing)
+    let progress = 0;
+    const progressInterval = setInterval(() => {
+        progress += 10;
+        if (decisionLoaderProgressBar) decisionLoaderProgressBar.style.width = `${Math.min(100, progress)}%`;
+        if (progress >= 100) clearInterval(progressInterval);
+    }, DECISION_PROCESSING_TIME / 10);
+
 
     await new Promise(resolve => setTimeout(resolve, DECISION_PROCESSING_TIME)); 
+    clearInterval(progressInterval); // Ensure interval is cleared
 
     const decisionMessage = `Decisão: ${action.charAt(0).toUpperCase() + action.slice(1)}`;
     addLogEntry(decisionMessage, 'decision', true);
@@ -1427,12 +1757,13 @@ async function handleDecision(action: string): Promise<void> {
         const contributingFlags = activeFlags.filter(f => f.severity === 'critical' || f.severity === 'high');
         lastBlockContextForImpactView = {
             scoreBeforeDecision: scoreBeforeDecision,
-            scoreAfterBlock: Math.max(0, Math.min(1000, scoreBeforeDecision + scoreChange)), // Calculate potential score after block
-            contributingFlags: contributingFlags.length > 0 ? contributingFlags : activeFlags.slice(0, 2), // Show some flags even if not critical
+            scoreAfterBlock: Math.max(0, Math.min(1000, scoreBeforeDecision + scoreChange)), 
+            contributingFlags: contributingFlags.length > 0 ? contributingFlags : activeFlags.slice(0, 2), 
             decisionTime: DECISION_PROCESSING_TIME,
             relevantFoundLabModuleText: getRelevantFoundLabModuleText(contributingFlags.length > 0 ? contributingFlags : activeFlags)
         };
         auditDetails += ` Impacto analisado com ${lastBlockContextForImpactView.contributingFlags.length} flag(s) contribuinte(s).`;
+        addTimelineEvent({type: 'block_decision', title: 'BLOCK', description: `Score antes: ${scoreBeforeDecision}, depois: ${lastBlockContextForImpactView.scoreAfterBlock}`});
     } else if (action === 'review') {
         scoreChange = Math.floor(Math.random() * 6) - 3; 
         auditDetails += " Item marcado para revisão manual detalhada.";
@@ -1475,22 +1806,26 @@ function renderImpactModalButtonArea(): void {
             }
         });
     } else {
-        area.innerHTML = ''; // Clear button if no context
+        area.innerHTML = ''; 
     }
 }
 
 function renderImpactComparisonModal(context: LastBlockContext): void {
-    if (!impactModalContentEl) return;
+    if (!impactModalContentEl || !impactModalBackdrop) return;
+
+    impactModalBackdrop.setAttribute('aria-labelledby', 'impact-modal-title-main');
+    impactModalContentEl.setAttribute('role', 'document');
+
 
     const withFoundLabFlags = context.contributingFlags.length > 0 
         ? context.contributingFlags.map(f => `<li>${f.name} (Severidade: ${f.severity})</li>`).join('')
         : "<li>Nenhuma flag crítica específica identificada como motor principal, decisão baseada no score geral.</li>";
     
     impactModalContentEl.innerHTML = `
-        <h2 class="impact-modal-title">Análise de Impacto da Decisão: Bloqueio</h2>
+        <h2 class="impact-modal-title" id="impact-modal-title-main">Análise de Impacto da Decisão: Bloqueio</h2>
         <div class="impact-comparison-container">
             <div class="impact-column with-foundlab">
-                <h3><span class="icon">✅</span> Com FoundLab Nexus</h3>
+                <h3><span class="icon"></span>Com FoundLab Nexus</h3>
                 <div class="impact-section">
                     <h4>Flags Críticas Acionadas:</h4>
                     <ul>${withFoundLabFlags}</ul>
@@ -1514,7 +1849,7 @@ function renderImpactComparisonModal(context: LastBlockContext): void {
             </div>
 
             <div class="impact-column without-foundlab">
-                <h3><span class="icon">❌</span> Simulação Sem FoundLab Nexus</h3>
+                <h3><span class="icon"></span>Simulação Sem FoundLab Nexus</h3>
                 <div class="impact-section">
                     <h4>Flags Críticas:</h4>
                     <p>Nenhuma flag crítica correspondente teria sido gerada / processada adequadamente.</p>
@@ -1558,7 +1893,6 @@ function setupImpactModalCloseActions(): void {
             closeImpactModal();
         }
     });
-    // Add keydown listener for Escape if not already present on a shared backdrop handler
     document.addEventListener('keydown', (event: KeyboardEvent) => {
         if (event.key === 'Escape' && isImpactModalVisible) {
             closeImpactModal();
@@ -1576,30 +1910,35 @@ function renderCatalogMode(): void {
                 <div class="product-card" data-product-id="${product.id}" role="button" tabindex="0" aria-labelledby="product-title-${product.id}">
                     <h3 id="product-title-${product.id}">${product.name}</h3>
                     <p class="description">${product.shortDescription}</p>
-                    <div class="diagram-placeholder"><em>${product.mainImagePlaceholder}</em></div>
+                    <div class="diagram-placeholder">${product.mainImagePlaceholder}</div>
                     <button class="cta-button" data-product-id="${product.id}" aria-label="Ver ${product.name} em ação">Ver em Ação</button>
                 </div>
             `).join('')}
         </div>
         <div class="core-modules-section">
-            <h2 class="section-title">Arquitetura FoundLab Core</h2>
+            <h2 class="section-title">Arquitetura FoundLab Core - Visualização Interativa</h2>
             <div class="core-modules-filters">
-                <input type="search" id="module-search-input" placeholder="Buscar módulos pelo título..." aria-label="Buscar módulos pelo título" value="${currentModuleFilterText}">
+                <input type="search" id="module-search-input" placeholder="Buscar módulos..." aria-label="Buscar módulos pelo título" value="${currentModuleFilterText}">
                 <select id="module-type-filter" aria-label="Filtrar por tipo de módulo">
                     <option value="all" ${currentModuleTypeFilter === 'all' ? 'selected' : ''}>Todos os Tipos</option>
                     ${allModuleTypes.map(type => `<option value="${type}" ${currentModuleTypeFilter === type ? 'selected' : ''}>${type}</option>`).join('')}
                 </select>
                 <label class="moat-filter-label">
                     <input type="checkbox" id="module-moat-filter" ${currentModuleMoatFilter ? 'checked' : ''}>
-                    Apenas Moat Institucional
+                    Apenas Moat
                 </label>
                 <select id="module-sort-order" aria-label="Ordenar módulos">
                     <option value="alphabetical" ${currentModuleSortOrder === 'alphabetical' ? 'selected' : ''}>Ordem Alfabética</option>
                     <option value="impact" ${currentModuleSortOrder === 'impact' ? 'selected' : ''}>Por Impacto</option>
                 </select>
             </div>
-            <div id="core-modules-grid">
-                <!-- Core modules will be rendered here -->
+            <div id="core-modules-diagram-container" class="core-modules-diagram-container">
+                <div class="mermaid" id="core-modules-mermaid-chart">
+                    <!-- Mermaid diagram will be rendered here -->
+                </div>
+            </div>
+            <div id="core-modules-list-fallback">
+                <!-- Fallback list / Click prompt will be here if diagram fails or for accessibility -->
             </div>
         </div>
     `;
@@ -1614,10 +1953,10 @@ function renderCatalogMode(): void {
                 if (product) {
                     if (targetElement.classList.contains('cta-button')) {
                         currentMode = 'simulator';
-                        activeProductDemoName = product.name; // Set active product demo name here
+                        activeProductDemoName = product.name; // STATE SET HERE
                         updateActiveButtonStyles();
                         clearAppContent();
-                        renderSimulatorMode(product.scenarioId); 
+                        renderSimulatorMode(product.scenarioId); // Pass scenarioId to renderSimulatorMode
                     } else {
                         showProductModal(product);
                     }
@@ -1626,48 +1965,37 @@ function renderCatalogMode(): void {
         });
     }
 
-    renderCoreModules(); 
+    renderCoreModulesDiagram(); 
 
     const searchInput = document.getElementById('module-search-input') as HTMLInputElement;
     searchInput?.addEventListener('input', (e) => {
         currentModuleFilterText = (e.target as HTMLInputElement).value;
-        renderCoreModules();
+        renderCoreModulesDiagram();
     });
 
     const typeFilter = document.getElementById('module-type-filter') as HTMLSelectElement;
     typeFilter?.addEventListener('change', (e) => {
         currentModuleTypeFilter = (e.target as HTMLSelectElement).value as ModuleType | 'all';
-        renderCoreModules();
+        renderCoreModulesDiagram();
     });
 
     const moatFilter = document.getElementById('module-moat-filter') as HTMLInputElement;
     moatFilter?.addEventListener('change', (e) => {
         currentModuleMoatFilter = (e.target as HTMLInputElement).checked;
-        renderCoreModules();
+        renderCoreModulesDiagram();
     });
     
     const sortOrderFilter = document.getElementById('module-sort-order') as HTMLSelectElement;
     sortOrderFilter?.addEventListener('change', (e) => {
         currentModuleSortOrder = (e.target as HTMLSelectElement).value as 'alphabetical' | 'impact';
-        renderCoreModules();
-    });
-
-    const coreModulesGrid = document.getElementById('core-modules-grid');
-    coreModulesGrid?.addEventListener('click', (event) => {
-        const card = (event.target as HTMLElement).closest('.core-module-card');
-        if (card instanceof HTMLElement && card.dataset.moduleTitle) {
-            const moduleTitle = card.dataset.moduleTitle;
-            const module = foundLabModules.find(m => m.title === moduleTitle);
-            if (module) {
-                showCoreModuleModal(module);
-            }
-        }
+        renderCoreModulesDiagram();
     });
 }
 
-function renderCoreModules(): void {
-    const gridContainer = document.getElementById('core-modules-grid');
-    if (!gridContainer) return;
+function renderCoreModulesDiagram(): void {
+    const diagramContainer = document.getElementById('core-modules-mermaid-chart');
+    const fallbackContainer = document.getElementById('core-modules-list-fallback');
+    if (!diagramContainer || !fallbackContainer) return;
 
     let filteredModules = [...foundLabModules];
 
@@ -1678,44 +2006,113 @@ function renderCoreModules(): void {
             module.description.toLowerCase().includes(searchTerm)
         );
     }
-
     if (currentModuleTypeFilter !== 'all') {
         filteredModules = filteredModules.filter(module => module.moduleType === currentModuleTypeFilter);
     }
-
     if (currentModuleMoatFilter) {
         filteredModules = filteredModules.filter(module => module.isMoat === true);
     }
-    
     if (currentModuleSortOrder === 'impact') {
         filteredModules.sort((a, b) => (b.impactScore || 0) - (a.impactScore || 0));
     } else { 
         filteredModules.sort((a, b) => a.title.localeCompare(b.title));
     }
 
-
     if (filteredModules.length === 0) {
-        gridContainer.innerHTML = `<p class="no-items-placeholder">Nenhum módulo encontrado com os filtros aplicados.</p>`;
+        diagramContainer.innerHTML = '';
+        fallbackContainer.innerHTML = `<p class="no-items-placeholder">Nenhum módulo encontrado com os filtros aplicados.</p>`;
         return;
     }
-
-    gridContainer.innerHTML = filteredModules.map(module => `
-        <div class="core-module-card" title="${module.description.replace(/"/g, '&quot;')}" data-module-title="${module.title}" role="button" tabindex="0">
-            <div class="module-card-header">
-                <span class="module-title">${module.title}</span>
-                ${module.isMoat ? '<span class="module-moat-badge">Moat</span>' : ''}
-            </div>
-            <div class="module-card-content">
-                <span class="module-type-badge type-${module.moduleType.toLowerCase().replace(/\s|\//g, '-')}">${module.moduleType} ${module.impactScore ? `(Impacto: ${module.impactScore})` : ''}</span>
-            </div>
+    
+    fallbackContainer.innerHTML = `<p class="diagram-interaction-prompt">Clique em um módulo no diagrama para ver detalhes. Se o diagrama não carregar, verifique o console.</p>
+        <div class="core-modules-grid">
+        ${filteredModules.map(module => `
+             <div class="core-module-card" title="${module.description.replace(/"/g, '&quot;')}" data-module-id="${module.id}" role="button" tabindex="0">
+                <div class="module-card-header">
+                    <span class="module-title">${module.title}</span>
+                    ${module.isMoat ? '<span class="module-moat-badge">Moat</span>' : ''}
+                </div>
+                <div class="module-card-content">
+                    <span class="module-type-badge type-${module.moduleType.toLowerCase().replace(/\s|\//g, '-')}">${module.moduleType} ${module.impactScore ? `(Impacto: ${module.impactScore})` : ''}</span>
+                </div>
+            </div>`).join('')}
         </div>
-    `).join('');
+    `;
+    
+    const fallbackGrid = fallbackContainer.querySelector('.core-modules-grid');
+    fallbackGrid?.addEventListener('click', (event) => {
+        const card = (event.target as HTMLElement).closest('.core-module-card');
+        if (card instanceof HTMLElement && card.dataset.moduleId) {
+            const moduleId = card.dataset.moduleId;
+            const module = foundLabModules.find(m => m.id === moduleId);
+            if (module) {
+                showCoreModuleModal(module);
+            }
+        }
+    });
+
+
+    let mermaidDefinition = 'graph TD;\n';
+    mermaidDefinition += '    subgraph "Produtos FoundLab"\n        direction LR\n';
+    productCatalog.forEach(p => {
+        mermaidDefinition += `        P_${p.id}["${p.name.replace(/"/g, '#quot;')}"]:::productNode;\n`;
+    });
+    mermaidDefinition += '    end\n';
+    
+    mermaidDefinition += '    subgraph "Módulos Core FoundLab (Filtrados)"\n        direction LR\n';
+    filteredModules.forEach(m => {
+        const label = `${m.title.replace(/"/g, '#quot;')} (${m.moduleType.replace(/"/g, '#quot;')})`;
+        mermaidDefinition += `        M_${m.id}["${label}"]:::moduleNode${m.isMoat ? 'Moat' : ''};\n`;
+        mermaidDefinition += `        click M_${m.id} call window.handleMermaidNodeClick("${m.id}") "Ver detalhes de ${m.title.replace(/"/g, '#quot;')}";\n`;
+    });
+    mermaidDefinition += '    end\n';
+
+    productCatalog.forEach(p => {
+        p.coreModulesUsedTitles?.forEach(moduleTitle => {
+            const coreModule = foundLabModules.find(fm => fm.title === moduleTitle);
+            if (coreModule && filteredModules.some(fm => fm.id === coreModule.id)) { 
+                mermaidDefinition += `    P_${p.id} --> M_${coreModule.id};\n`;
+            }
+        });
+    });
+
+    // Corporate Mermaid styling
+    mermaidDefinition += `    classDef productNode fill:var(--corporate-surface),stroke:var(--corporate-border),stroke-width:1px,color:var(--corporate-text-primary),rx:var(--border-radius-small),ry:var(--border-radius-small),padding:8px,font-family:var(--font-sans),font-size:11px,font-weight:400;\n`;
+    mermaidDefinition += `    classDef moduleNode fill:var(--corporate-surface),stroke:var(--corporate-border),stroke-width:1px,color:var(--corporate-text-secondary),rx:var(--border-radius-small),ry:var(--border-radius-small),padding:7px,font-family:var(--font-sans),font-size:10px,font-weight:400;\n`;
+    mermaidDefinition += `    classDef moduleNodeMoat fill:var(--corporate-surface),stroke:var(--corporate-primary-blue),stroke-width:1px,color:var(--corporate-primary-blue),font-weight:500,font-family:var(--font-sans),font-size:10px;\n`;
+    
+    diagramContainer.innerHTML = mermaidDefinition;
+
+    try {
+        if (window.mermaid) {
+            window.mermaid.run({
+                nodes: [diagramContainer]
+            });
+        }
+    } catch (e) {
+        console.error("Erro ao renderizar diagrama Mermaid:", e);
+        diagramContainer.innerHTML = "<p class='error-message' style='text-align:center;'>Erro ao renderizar diagrama. Verifique o console.</p>";
+        fallbackContainer.innerHTML = `<p class="error-message">Falha ao renderizar o diagrama interativo. Usando lista de módulos abaixo.</p>` + fallbackContainer.innerHTML;
+    }
 }
+
+(window as any).handleMermaidNodeClick = (moduleId: string) => {
+    const module = foundLabModules.find(m => m.id === moduleId);
+    if (module) {
+        showCoreModuleModal(module);
+    } else {
+        console.warn("Módulo não encontrado para o clique do Mermaid:", moduleId);
+    }
+};
+
 
 
 function showProductModal(product: Product): void {
+    productModalBackdrop.setAttribute('aria-labelledby', `product-modal-title-${product.id}`);
+    productModalContentEl.setAttribute('role', 'document');
+
     productModalContentEl.innerHTML = `
-        <h2>${product.name}</h2>
+        <h2 id="product-modal-title-${product.id}">${product.name}</h2>
         <div class="modal-image-placeholder">${product.mainImagePlaceholder}</div>
 
         <h3 class="modal-section-title">Como Funciona</h3>
@@ -1735,7 +2132,7 @@ function showProductModal(product: Product): void {
 
         <h3 class="modal-section-title">Demonstração em Vídeo (Conceito)</h3>
         <div class="modal-video-placeholder">
-            <p><em>Placeholder para vídeo. Roteiro: ${product.videoPlaceholderScript}</em></p>
+            <p><em>Roteiro: ${product.videoPlaceholderScript}</em></p>
         </div>
 
         <div class="case-study-box">
@@ -1758,48 +2155,47 @@ function showProductModal(product: Product): void {
     productModalContentWrapper.focus(); 
 
     document.getElementById('product-modal-close-btn-bottom')?.addEventListener('click', closeProductModal);
-    productModalCloseButtonTop.onclick = closeProductModal; 
     
     document.getElementById('product-modal-cta-btn')?.addEventListener('click', () => {
         closeProductModal();
         currentMode = 'simulator';
-        activeProductDemoName = product.name; // Set active product demo name here
+        activeProductDemoName = product.name; 
         updateActiveButtonStyles();
         clearAppContent(); 
         renderSimulatorMode(product.scenarioId); 
-    });
-
-    productModalBackdrop.addEventListener('click', (event: MouseEvent) => {
-        if (event.target === productModalBackdrop) { 
-            closeProductModal();
-        }
-    });
-    productModalBackdrop.addEventListener('keydown', (event: KeyboardEvent) => {
-        if (event.key === 'Escape') {
-            closeProductModal();
-        }
     });
 }
 
 function closeProductModal(): void {
     productModalBackdrop.classList.add('hidden');
-    productModalCloseButtonTop.onclick = null; 
+}
+
+function setupProductModalCloseActions(): void {
+    productModalCloseButtonTop.addEventListener('click', closeProductModal);
+    productModalBackdrop.addEventListener('click', (event: MouseEvent) => {
+        if (event.target === productModalBackdrop) { 
+            closeProductModal();
+        }
+    });
 }
 
 
 // --- CORE MODULE DETAIL MODAL ---
 function showCoreModuleModal(module: FoundLabModule): void {
+    coreModuleModalBackdrop.setAttribute('aria-labelledby', `core-module-modal-title-${module.id}`);
+    coreModuleModalContentEl.setAttribute('role', 'document');
+
     let architectureHTML = '';
     if (module.visualArchitecture) {
         switch (module.visualArchitecture.type) {
             case 'mermaid':
-                architectureHTML = `<div class="mermaid" style="margin: 1rem 0; padding: 1rem; background-color: #f9f9f9; border-radius: 4px; border: 1px solid #eee;">${module.visualArchitecture.content}</div>`;
+                architectureHTML = `<div class="mermaid">${module.visualArchitecture.content}</div>`;
                 break;
             case 'text_diagram':
                 architectureHTML = `<pre class="text-diagram">${module.visualArchitecture.content}</pre>`;
                 break;
-            case 'img_placeholder':
-                architectureHTML = `<div class="diagram-placeholder"><em>${module.visualArchitecture.content}</em></div>`;
+            case 'img_placeholder': // Corporate placeholder styling
+                architectureHTML = `<div class="modal-image-placeholder" style="height: auto; min-height:100px; text-align:left; background-color: var(--corporate-background); padding: 0.75rem;"><em>${module.visualArchitecture.content}</em></div>`;
                 break;
         }
     }
@@ -1809,7 +2205,7 @@ function showCoreModuleModal(module: FoundLabModule): void {
     );
 
     coreModuleModalContentEl.innerHTML = `
-        <h2>${module.title} ${module.isMoat ? '<span class="moat-badge-inline">Moat Institucional</span>' : ''}</h2>
+        <h2 id="core-module-modal-title-${module.id}">${module.title} ${module.isMoat ? '<span class="moat-badge-inline">Moat</span>' : ''}</h2>
         <p class="module-modal-description">${module.description}</p>
         
         <div class="module-meta-grid">
@@ -1835,7 +2231,7 @@ function showCoreModuleModal(module: FoundLabModule): void {
         ` : ''}
 
         ${architectureHTML ? `
-            <h3 class="modal-section-title">Arquitetura Visual</h3>
+            <h3 class="modal-section-title">Arquitetura Visual (Exemplo)</h3>
             ${architectureHTML}
         ` : ''}
 
@@ -1876,29 +2272,25 @@ function showCoreModuleModal(module: FoundLabModule): void {
         } catch (e) {
             console.error("Erro ao renderizar diagrama Mermaid:", e);
             const mermaidContainer = coreModuleModalContentEl.querySelector('.mermaid');
-            if (mermaidContainer) mermaidContainer.innerHTML = "Erro ao renderizar diagrama.";
+            if (mermaidContainer) mermaidContainer.innerHTML = "<p class='error-message' style='text-align:center;'>Erro ao renderizar diagrama.</p>";
         }
     }
 
 
     document.getElementById('core-module-modal-close-btn-bottom')?.addEventListener('click', closeCoreModuleModal);
-    coreModuleModalCloseButtonTop.onclick = closeCoreModuleModal;
+}
 
+function closeCoreModuleModal(): void {
+    coreModuleModalBackdrop.classList.add('hidden');
+}
+
+function setupCoreModuleModalCloseActions(): void {
+    coreModuleModalCloseButtonTop.addEventListener('click', closeCoreModuleModal);
     coreModuleModalBackdrop.addEventListener('click', (event: MouseEvent) => {
         if (event.target === coreModuleModalBackdrop) {
             closeCoreModuleModal();
         }
     });
-    coreModuleModalBackdrop.addEventListener('keydown', (event: KeyboardEvent) => {
-        if (event.key === 'Escape') {
-            closeCoreModuleModal();
-        }
-    });
-}
-
-function closeCoreModuleModal(): void {
-    coreModuleModalBackdrop.classList.add('hidden');
-    coreModuleModalCloseButtonTop.onclick = null;
 }
 
 // --- DOCUMENTS MODE (Formerly Proof Panel) ---
@@ -1912,9 +2304,9 @@ function renderDocumentsMode(): void {
             </p>
             <div class="document-list">
                 ${foundLabDocumentCollection.map(doc => `
-                    <div class="document-card">
+                    <div class="document-card" role="article" aria-labelledby="doc-title-${doc.id}">
                         <div class="document-card-header">
-                            <h3 class="document-title">${doc.title}</h3>
+                            <h3 class="document-title" id="doc-title-${doc.id}">${doc.title}</h3>
                             <span class="document-type-badge">${doc.type}</span>
                         </div>
                         <p class="document-summary">${doc.summary}</p>
@@ -1958,7 +2350,6 @@ function loadDecisionAuditLogFromStorage(): void {
 
 function saveDecisionToAuditLog(entry: DecisionAuditEntry): void {
     if (USE_REAL_API) {
-        // postDecisionLog(entry);
         console.log("Simulando chamada de API para postDecisionLog com:", entry);
     }
     decisionAuditLog.unshift(entry); 
@@ -1980,7 +2371,7 @@ function renderDecisionAuditLog(): void {
 
     listEl.innerHTML = decisionAuditLog.map(entry => `
         <div class="audit-log-entry">
-            <strong>${entry.timestamp.toLocaleTimeString()}</strong> - Decisão: ${entry.decision.toUpperCase()}
+            <strong>${entry.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</strong> - Decisão: ${entry.decision.toUpperCase()}
             (Score: ${entry.scoreBefore} ➔ ${entry.scoreAfter}) - <em>${entry.details}</em>
         </div>
     `).join('');
@@ -1989,5 +2380,18 @@ function renderDecisionAuditLog(): void {
 declare global {
     interface Window {
         mermaid: any; 
+        handleMermaidNodeClick: (moduleId: string) => void;
     }
 }
+// Add a global keydown listener for Escape to close any active modal
+document.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+        if (!productModalBackdrop.classList.contains('hidden')) {
+            closeProductModal();
+        } else if (!coreModuleModalBackdrop.classList.contains('hidden')) {
+            closeCoreModuleModal();
+        } else if (isImpactModalVisible && impactModalBackdrop && !impactModalBackdrop.classList.contains('hidden')) {
+            closeImpactModal();
+        }
+    }
+});
